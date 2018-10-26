@@ -27,7 +27,6 @@
 	Email zlvbvbzl@gmail.com
 */
 #include "fmodwrap.h"
-#include "fmod/fmod.h"
 #ifdef _DEBUG
 #include "fmod/fmod_errors.h"
 #endif
@@ -60,37 +59,12 @@ static FMOD_RESULT _C(FMOD_RESULT result)
     return result;
 }
 // -----------------------------------------------------------------------------
-static void set_user_speak_mode()
-{
-	FMOD_SPEAKERMODE speakermode;
-	FMOD_CAPS        caps;
-	_C(FMOD_System_GetDriverCaps(kFmod_system, 0, &caps, 0, 0, &speakermode));
-	_C(FMOD_System_SetSpeakerMode(kFmod_system, speakermode));
-	if (caps & FMOD_CAPS_HARDWARE_EMULATED)      
-	{                               
-		// 音频播放的硬件加速被关闭，可能会影响播放性能
-		_C(FMOD_System_SetDSPBufferSize(kFmod_system, 1024, 10));
-	}
-
-	_C(FMOD_System_GetDriverInfo(kFmod_system, 0, kFmod_devicename, 256, 0));
-
-	if (strstr(kFmod_devicename, "SigmaTel"))   
-	{// 据说是防止Sigmatel声音设备在播放PCM 16bit时发出破裂声，所以把采样率设置为48000
-	 // 总之FMOD的例子是这么做的……
-		_C(FMOD_System_SetSoftwareFormat(kFmod_system, 48000, FMOD_SOUND_FORMAT_PCMFLOAT, 0,0, FMOD_DSP_RESAMPLER_LINEAR));
-	}
-}
-// -----------------------------------------------------------------------------
-static void set_stero_speak_mode()
-{
-	_C(FMOD_System_SetSpeakerMode(kFmod_system, FMOD_SPEAKERMODE_STEREO));
-}
-// -----------------------------------------------------------------------------
 // 状态回调
-static FMOD_RESULT F_CALLBACK fmod_callback(FMOD_CHANNEL *channel, FMOD_CHANNEL_CALLBACKTYPE type, void* /*commanddata1*/, void* /*commanddata2*/)
+static FMOD_RESULT F_CALLBACK fmod_callback(FMOD_CHANNELCONTROL *channelcontrol, FMOD_CHANNELCONTROL_TYPE controltype, FMOD_CHANNELCONTROL_CALLBACK_TYPE callbacktype, void *commanddata1, void *commanddata2)
 {
-	if (type != FMOD_CHANNEL_CALLBACKTYPE_END)
-		return FMOD_OK;
+ 	if (callbacktype != FMOD_CHANNELCONTROL_CALLBACK_END)
+ 		return FMOD_OK;
+    FMOD_CHANNEL *channel = (FMOD_CHANNEL *)channelcontrol;
 	ChannelPlayers::iterator it = channel_players.find(channel);
 	if (it == channel_players.end())
 		return FMOD_OK;
@@ -116,19 +90,8 @@ void Open()
     {
 		_C(FMOD_System_SetOutput(kFmod_system, FMOD_OUTPUTTYPE_NOSOUND));
     }
-	else
-    {
-		set_user_speak_mode();
-    }
 
-	FMOD_RESULT result = FMOD_System_Init(kFmod_system, 4093, FMOD_INIT_NORMAL, NULL);
-
-	if (result == FMOD_ERR_OUTPUT_CREATEBUFFER)         
-	{// 扬声器模式不被声卡支持，切回立体声模式
-		set_stero_speak_mode();
-		_C(FMOD_System_Init(kFmod_system, 4093, FMOD_INIT_NORMAL, NULL));
-	}
-
+    _C(FMOD_System_Init(kFmod_system, 4093, FMOD_INIT_NORMAL, NULL));
 	_C(FMOD_System_Set3DSettings(kFmod_system, 1.0f, DISTANCEFACTOR, 1.0f));
 	_C(FMOD_System_SetGeometrySettings(kFmod_system, 2000.0f));
 }
@@ -141,7 +104,7 @@ void Close()
 // -----------------------------------------------------------------------------
 Sound *CreateSound(const char *name)
 {
-	int mode = FMOD_2D|FMOD_CREATESTREAM|FMOD_HARDWARE;
+	int mode = FMOD_2D|FMOD_CREATESTREAM/*|FMOD_HARDWARE*/;
 	char pcPath[MAX_PATH];
 	ff_standardize_path(name, pcPath);
 
@@ -233,12 +196,19 @@ void Player::Load(Sound *sound)
         return;
     }
 	sound_ = sound;
-	_C(FMOD_System_PlaySound(kFmod_system, FMOD_CHANNEL_FREE, sound_->get_fmod_sound(), BSTRUE, &fmod_channel_));
+	_C(FMOD_System_PlaySound(kFmod_system, sound_->get_fmod_sound(), nullptr, 0, &fmod_channel_));
 	_C(FMOD_Channel_SetCallback(fmod_channel_, fmod_callback));
 	looped(looped());
 	channel_players[fmod_channel_] = this;
 	if (volume_ > -0xFFFF)
 		volume(volume_);
+    
+    _C(FMOD_System_GetMasterChannelGroup(kFmod_system, &channerlgroup_));
+    _C(FMOD_System_CreateDSPByType(kFmod_system, FMOD_DSP_TYPE_FFT, &dsp_));
+    _C(FMOD_Channel_AddDSP(fmod_channel_, 0, dsp_));
+    int windowsize = 1024;
+    _C(FMOD_DSP_SetParameterInt(dsp_, FMOD_DSP_FFT_WINDOWTYPE, FMOD_DSP_FFT_WINDOW_BLACKMANHARRIS));
+    _C(FMOD_DSP_SetParameterInt(dsp_, FMOD_DSP_FFT_WINDOWSIZE, windowsize));
 }
 // -----------------------------------------------------------------------------
 void Player::Unload()
@@ -248,7 +218,7 @@ void Player::Unload()
 	sound_ = NULL;
 	channel_players.erase(fmod_channel_);
 	_C(FMOD_Channel_Stop(fmod_channel_));    
-	fmod_channel_ = NULL;
+	fmod_channel_ = NULL;    
 }
 // -----------------------------------------------------------------------------
 Player::Player()
@@ -338,10 +308,18 @@ void Player::elapse( unsigned int elap )
 	_C(FMOD_Channel_SetPosition(fmod_channel_, elap, FMOD_TIMEUNIT_MS));
 }
 // -----------------------------------------------------------------------------
-float *Player::GetSpectrum( int channel_offset )
-{
-	FMOD_Channel_GetSpectrum(fmod_channel_,rate_[channel_offset],512,channel_offset,FMOD_DSP_FFT_WINDOW_BLACKMANHARRIS);
-	return rate_[channel_offset];
+void Player::GetSpectrum()
+{    
+    char s[256];
+    unsigned int len;
+    _C(FMOD_DSP_GetParameterData(
+        dsp_,
+        FMOD_DSP_FFT_SPECTRUMDATA,
+        (void **)&fftparameter_,
+        &len,
+        s,
+        256
+    ));
 }
 // -----------------------------------------------------------------------------
 void Player::Reload()

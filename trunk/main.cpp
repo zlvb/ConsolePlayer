@@ -117,7 +117,7 @@ fmodwrap::Player    *player = NULL;
 int     list_cur = 0;
 int     current_sound = -1;
 int     list_start = 0;
-float   fft_rate[512] = {0};
+float   fft_rate[1024] = {0};
 bool    visualization_isopen = false;
 char    vis_char = '|';
 bool    needupdatelist = true;
@@ -391,17 +391,18 @@ static void show_list()
 static void make_visualizion(char key )
 {
     char keys[2] = {key, '\0'};
-    if (strstr(VIS_CHAR, keys))
+    if (strstr(VIS_CHAR, keys) && key != 0)
         vis_char = key;
 
-    float *leftchannel = NULL;
+    
+    player->GetSpectrum();
+    float *leftchannel = player->Fftparameter()->spectrum[0];
     float *rightchannel = NULL;
-    leftchannel = player->GetSpectrum(0);
     if (player->sound()->channels() >= 2)
-        rightchannel = player->GetSpectrum(1);
+        rightchannel = player->Fftparameter()->spectrum[1];
 
     float max = 0.0f;
-    for (int j = 0; j < 512; j++)
+    for (int j = 0; j < player->Fftparameter()->length; j++)
     {
         if (leftchannel[j] > max)
         {
@@ -410,7 +411,7 @@ static void make_visualizion(char key )
     }
     if (max > 0.0001f)
     {
-        for (int i = 0; i < 512; i++)
+        for (int i = 0; i < player->Fftparameter()->length; i++)
         {
             float val = leftchannel[i];
             if (rightchannel)
@@ -428,7 +429,7 @@ static void show_visualization(short row, short col)
     const int height = 24;
     char screenlines[width][height];
 	
-    float ff_rate_step = 512.0f / width;
+    float ff_rate_step = (float)std::size(fft_rate) / width / 2.0f;
     for (int i = 0; i < width; i++)
 	{
 		float val = fft_rate[int(ff_rate_step * i)];
@@ -663,6 +664,7 @@ static void open_close_vis()
 
 static void init()
 {
+    system("mode con: cols=80 lines=25");
     SetConsoleTitleA("CONSOLE PLAYER");
     COORD size = {80, 25};
     SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), size);
@@ -673,7 +675,7 @@ static void init()
     player = fmodwrap::CreatePlayer();
     player->set_endcallback(on_play_end);
     fmodwrap::master_volume(0.5f);
-    current_sound = restore_list_log();
+    current_sound = restore_list_log();    
 }
 
 // on quit

@@ -30,9 +30,7 @@
 #ifndef FMODWRAP
 #define FMODWRAP
 
-struct FMOD_CHANNEL;
-struct FMOD_SOUND;
-struct FMOD_REVERB_PROPERTIES;
+#include "fmod/fmod.h"
 
 namespace fmodwrap{
 class Player;
@@ -68,8 +66,9 @@ public:
 	bool looped() const {return looped_;}
 	bool playing();
 	Sound *sound() const {return sound_;}
-	float *GetSpectrum(int channel_offset);
+	void GetSpectrum();
 	void Reload();
+    FMOD_DSP_PARAMETER_FFT *Fftparameter() const { return fftparameter_; }
 private:
 	Player();
 	~Player();
@@ -80,7 +79,9 @@ private:
 	bool			looped_;
 	mutable float	volume_;
 	PLAYER_END_CALLBACK endcallback_;
-	float rate_[2][512];
+    FMOD_DSP_PARAMETER_FFT *fftparameter_ = nullptr;
+    FMOD_CHANNELGROUP *channerlgroup_ = nullptr;
+    FMOD_DSP *dsp_ = nullptr;
 };
 
 class Sound

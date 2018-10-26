@@ -229,3 +229,5 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+trunk/.vs/ConsolePlayer/v15/Browse.VC.opendb
+trunk/.vs/ConsolePlayer/v15/Browse.VC.db
