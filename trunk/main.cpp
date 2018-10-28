@@ -35,6 +35,7 @@
 #include <vector>
 #include <math.h>
 #include <share.h>
+#include <time.h>
 
 #define KEY_UP     72
 #define KEY_DOWN   80
@@ -51,6 +52,8 @@
 #define KEY_SPACE  32
 #define KEY_RETURN 13
 #define KEY_L      'l'
+#define KEY_J      'j'
+#define KEY_K      'k'
 
 
 #define KEY_LIST_PREV     KEY_UP
@@ -68,7 +71,7 @@
 
 #define MAX_LIST_INDEX  16
 #define MAX_LIST_COUNT  (MAX_LIST_INDEX + 1) 
-#define MAX_NAME_LENGTH 77
+#define MAX_NAME_LENGTH 79
 #define VOLUME_LENGTH   20
 #define PROCESS_CHAR    '|'
 #define VOLUME_CHAR     '-'
@@ -111,6 +114,14 @@
 
 const char* FORMATS[] = {"MP3", "WAV", "OGG", "WMA", "#"};
 
+enum LoopState
+{
+    LS_NORMAL,
+    LS_ONE,
+    LS_RAND,
+    LS_COUNT,
+};
+
 std::vector<char*> sounds;
 fmodwrap::Sound     *sound_playing = NULL;
 fmodwrap::Player    *player = NULL;
@@ -128,9 +139,9 @@ int     sleep_time = 1000;
 bool    need_next = true;
 bool    force_refresh_procbar = true;
 bool    about_is_show = false;
-bool    one_loop = false;
+LoopState    one_loop = LS_NORMAL;
 char    cur_icon[] = " >";
-
+const char *gs_path = nullptr;
 #define SOUND_COUNT ((int)sounds.size())
 #define MAX_SOUND_INDEX (SOUND_COUNT - 1)
 
@@ -267,7 +278,7 @@ static void add_sound(const char *path)
 static void create_list()
 {
 	printf("Scaning folders...\n");
-    ff_find(".", add_sound);
+    ff_find(gs_path, add_sound);
 	system("cls");
 	if (SOUND_COUNT == 0)
 	{
@@ -374,15 +385,31 @@ static void show_list()
         else
             set_font_color(FONT_WHITE);
 
-        if (playing_line && one_loop)
-            putchar('L');
+        char lmode = ' ';
+        if (playing_line)
+        {
+            if (one_loop == LS_NORMAL)
+            {
+                // pass
+            }
+            else if (one_loop == LS_ONE)
+            {
+                lmode = 'L';
+            }
+            else if (one_loop == LS_RAND)
+            {
+                lmode = 'R';
+            }
+        }
         else
-            putchar(' ');
+        {
+            // pass
+        }
         
-        const char *path = sounds[i] + 2; // +2去掉前面的".\"
+        const char *path = sounds[i];
 		char npath[80] = {0};
-        _snprintf_s(npath, sizeof(npath), MAX_NAME_LENGTH, " %d %s", i + 1, path);
-        printf("%-79.79s", npath);
+        _snprintf_s(npath, sizeof(npath), MAX_NAME_LENGTH, "%c %d %s", lmode, i + 1, path);
+        printf("%-79.79s\n", npath); // -80：左对齐，不足80补空格，.80：超过80截断
 		
         set_font_color(FONT_WHITE);
 	}	
@@ -489,7 +516,9 @@ static void on_play_end(fmodwrap::Player *)
 // which music was playing on last quitting
 static void recored_list_log(int curidx)
 {
-    FILE* pf = _fsopen("list.record", "wb+", _SH_DENYNO);
+    std::string listpath(gs_path);
+    listpath += "\\list.record";
+    FILE* pf = _fsopen(listpath.c_str(), "wb+", _SH_DENYNO);
     fwrite(&curidx, sizeof(curidx), 1, pf);
     fclose(pf);
     pf = NULL;
@@ -498,7 +527,9 @@ static void recored_list_log(int curidx)
 // write the index of playing music to disk
 static int restore_list_log()
 {
-    FILE* pf = _fsopen("list.record", "rb", _SH_DENYNO);
+    std::string listpath(gs_path);
+    listpath += "\\list.record";
+    FILE* pf = _fsopen(listpath.c_str(), "rb", _SH_DENYNO);
     if (pf)
     {
         int curidx = 0;
@@ -541,8 +572,28 @@ static void play();
 static void next(bool force)
 {
     int p = current_sound;
-    if (force || !one_loop)
-        p++;
+    if (force)
+    {
+        if (one_loop == LS_RAND)
+        {
+            p = rand() % SOUND_COUNT;
+        }
+        else
+        {
+            p++;
+        }
+    }
+    else
+    {
+        if (one_loop == LS_NORMAL)
+        {
+            p++;
+        }
+        else if (one_loop == LS_RAND)
+        {
+            p = rand() % SOUND_COUNT;
+        }
+    }
 
     current_sound = p % SOUND_COUNT;
     play();  
@@ -554,8 +605,15 @@ static void next(bool force)
 
 static void prev()
 {
-    int p = current_sound + MAX_SOUND_INDEX;
-    current_sound = p % SOUND_COUNT;
+    if (one_loop == LS_NORMAL || one_loop == LS_ONE)
+    {
+        int p = current_sound + MAX_SOUND_INDEX;
+        current_sound = p % SOUND_COUNT;
+    }
+    else if (one_loop == LS_RAND)
+    {
+        current_sound = rand() % SOUND_COUNT;
+    }
     play();  
     if (current_sound < list_start)
         downlist();
@@ -565,7 +623,8 @@ static void prev()
 
 static void switch_loop()
 {
-    one_loop = !one_loop;
+    int c = one_loop;
+    one_loop = (LoopState)((++c) % LS_COUNT);
     needupdatelist = true;
 }
 
@@ -664,12 +723,21 @@ static void open_close_vis()
 
 static void init()
 {
+    srand(time(NULL));
     system("mode con: cols=80 lines=25");
     SetConsoleTitleA("CONSOLE PLAYER");
     COORD size = {80, 25};
     SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), size);
     SMALL_RECT rect = {0, 0, 80, 25};
     SetConsoleWindowInfo(GetStdHandle(STD_OUTPUT_HANDLE), false, &rect);
+
+    DWORD dwStyle = GetWindowLong(GetConsoleWindow(), GWL_STYLE);
+
+    dwStyle &= ~(WS_SIZEBOX);
+    dwStyle &= ~(WS_MAXIMIZEBOX); //禁止最大化
+
+    SetWindowLong(GetConsoleWindow(), GWL_STYLE, dwStyle);
+
     fmodwrap::Open();
     create_list();
     player = fmodwrap::CreatePlayer();
@@ -734,9 +802,11 @@ static char process_input()
         switchabout();
         break;
     case KEY_PGUP:
+    case KEY_J:
         pageup();
         break;
     case KEY_PGDOWN:
+    case KEY_K:
         pagedown();
         break;
     case KEY_LOOP:
@@ -748,8 +818,13 @@ static char process_input()
     return key;
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    if (argc < 2)
+    {
+        return 0;
+    }
+    gs_path = argv[1];
     init();
 	for (;;)
 	{
