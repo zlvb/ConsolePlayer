@@ -822,9 +822,13 @@ int main(int argc, char *argv[])
 {
     if (argc < 2)
     {
-        return 0;
+        gs_path = ".";
     }
-    gs_path = argv[1];
+    else
+    {
+        gs_path = argv[1];
+    }
+    
     init();
 	for (;;)
 	{
