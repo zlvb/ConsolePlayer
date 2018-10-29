@@ -151,8 +151,10 @@ float master_volume()
 // -----------------------------------------------------------------------------
 void master_volume( float vol )
 {
-	if (vol > 1.0f)
-		vol = 1.0f;
+    if (vol > 1.0f)
+        vol = 1.0f;
+    else if (vol < 0.0f)
+        vol = 0.0f;
 	FMOD_CHANNELGROUP *master_group;
 	_C(FMOD_System_GetMasterChannelGroup(kFmod_system, &master_group));
 	_C(FMOD_ChannelGroup_SetVolume(master_group,vol));

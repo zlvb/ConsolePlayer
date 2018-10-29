@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <Windows.h>
 #include <vector>
+#include <random>
 #include <math.h>
 #include <share.h>
 #include <time.h>
@@ -142,6 +143,17 @@ bool    about_is_show = false;
 LoopState    one_loop = LS_NORMAL;
 char    cur_icon[] = " >";
 const char *gs_path = nullptr;
+
+static std::random_device rd;
+static std::random_device::result_type seed = rd();
+static std::mt19937 randomgen(seed);
+static std::uniform_int_distribution<int> gdist(0, INT_MAX);
+
+static int Rand()
+{
+    return gdist(randomgen);
+}
+
 #define SOUND_COUNT ((int)sounds.size())
 #define MAX_SOUND_INDEX (SOUND_COUNT - 1)
 
@@ -576,7 +588,7 @@ static void next(bool force)
     {
         if (one_loop == LS_RAND)
         {
-            p = rand() % SOUND_COUNT;
+            p = Rand();
         }
         else
         {
@@ -591,7 +603,7 @@ static void next(bool force)
         }
         else if (one_loop == LS_RAND)
         {
-            p = rand() % SOUND_COUNT;
+            p = Rand();
         }
     }
 
@@ -612,7 +624,7 @@ static void prev()
     }
     else if (one_loop == LS_RAND)
     {
-        current_sound = rand() % SOUND_COUNT;
+        current_sound = Rand() % SOUND_COUNT;
     }
     play();  
     if (current_sound < list_start)
@@ -723,7 +735,6 @@ static void open_close_vis()
 
 static void init()
 {
-    srand(time(NULL));
     system("mode con: cols=80 lines=25");
     SetConsoleTitleA("CONSOLE PLAYER");
     COORD size = {80, 25};
