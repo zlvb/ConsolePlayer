@@ -101,8 +101,8 @@
 "                                                                                "
 
 #define CONTROLPANEL_TEXT \
-"[°¸°˝] Select       [E] Volume up\n"                        \
-"[°˚°˙] Prev/Next    [Q] Volume down     [X] Visualization\n"\
+"[‚Üë‚Üì] Select       [E] Volume up\n"                        \
+"[‚Üê‚Üí] Prev/Next    [Q] Volume down     [X] Visualization\n"\
 "[SPACE] Pause       [RETURN] Play       [PgUp/PgDn] Scroll list\n"\
 "[L] Loop mode       [A] About           [Esc] Quit"
 
@@ -113,7 +113,15 @@
 
 #define VIS_CHAR "~!@#$%^&-*()_+|<>{}:\"`=\\[];\',./?"
 
-const char* FORMATS[] = {"MP3", "WAV", "OGG", "WMA", "#"};
+const char* FORMATS[] = {
+    "MP3", "WAV", "OGG", "WMA",
+    "FLAC", "AAC", "M4A",
+    "AIFF", "AIF",
+    "MID", "MIDI",
+    "MOD", "S3M", "IT", "XM",
+    "OPUS",
+    "#"
+};
 
 enum LoopState
 {
@@ -421,7 +429,7 @@ static void show_list()
         const char *path = sounds[i];
 		char npath[80] = {0};
         _snprintf_s(npath, sizeof(npath), MAX_NAME_LENGTH, "%c %d %s", lmode, i + 1, path);
-        printf("%-79.79s\n", npath); // -80£∫◊Û∂‘∆Î£¨≤ª◊„80≤πø’∏Ò£¨.80£∫≥¨π˝80Ωÿ∂œ
+        printf("%-79.79s\n", npath); // -80ÔºöÂ∑¶ÂØπÈΩêÔºå‰∏çË∂≥80Ë°•Á©∫Ê†ºÔºå.80ÔºöË∂ÖËøá80Êà™Êñ≠
 		
         set_font_color(FONT_WHITE);
 	}	
@@ -745,7 +753,7 @@ static void init()
     DWORD dwStyle = GetWindowLong(GetConsoleWindow(), GWL_STYLE);
 
     dwStyle &= ~(WS_SIZEBOX);
-    dwStyle &= ~(WS_MAXIMIZEBOX); //Ω˚÷π◊Ó¥ÛªØ
+    dwStyle &= ~(WS_MAXIMIZEBOX); //Á¶ÅÊ≠¢ÊúÄÂ§ßÂåñ
 
     SetWindowLong(GetConsoleWindow(), GWL_STYLE, dwStyle);
 
