@@ -101,8 +101,8 @@
 "                                                                                "
 
 #define CONTROLPANEL_TEXT \
-"[↑↓] Select       [E] Volume up\n"                        \
-"[←→] Prev/Next    [Q] Volume down     [X] Visualization\n"\
+"[Up/Down] Select   [E] Volume up\n"                        \
+"[Left/Right] Prev/Next [Q] Volume down [X] Visualization\n"\
 "[SPACE] Pause       [RETURN] Play       [PgUp/PgDn] Scroll list\n"\
 "[L] Loop mode       [A] About           [Esc] Quit"
 
