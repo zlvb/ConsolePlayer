@@ -70,14 +70,31 @@
 #define KEY_PLAY          KEY_RETURN
 #define KEY_LOOP          KEY_L
 
-#define MAX_LIST_INDEX  16
-#define MAX_LIST_COUNT  (MAX_LIST_INDEX + 1) 
-#define MAX_NAME_LENGTH 79
 #define VOLUME_LENGTH   20
 #define PROCESS_CHAR    '|'
 #define VOLUME_CHAR     '-'
 #define PROCESS_POSCHAR '|'
 #define VOLUME_POSCHAR  '|'
+
+// Dynamic console size
+static int con_width = 80;
+static int con_height = 25;
+
+static void query_console_size()
+{
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi))
+    {
+        con_width  = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        con_height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+        if (con_width < 40)  con_width = 40;
+        if (con_height < 10) con_height = 10;
+    }
+}
+
+#define MAX_LIST_INDEX  (con_height - 9)
+#define MAX_LIST_COUNT  (MAX_LIST_INDEX + 1) 
+#define MAX_NAME_LENGTH (con_width - 1)
 
 #define FONT_LIGHT_BLUE       FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_INTENSITY
 #define FONT_WHITE            FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED
@@ -203,7 +220,7 @@ static void switchabout()
     printf("\n\n\n\n"
            "                                < [A] Return >\n");
    
-    move_screen_cur(24, 79);
+    move_screen_cur((short)(con_height - 1), (short)(con_width - 1));
 }
 
 // up scroll
@@ -312,11 +329,10 @@ static void create_list()
 }
 
 // generate processbar
-template <int size>
-static void show_processbar(short x, short y)
+static void show_processbar(short x, short y, int size)
 {
     const int probar_length = size;
-    char probar[probar_length + 1];
+    char *probar = (char*)_alloca(probar_length + 1);
     memset(probar, PROCESS_CHAR, probar_length);
     probar[probar_length] = '\0';
 
@@ -342,7 +358,7 @@ static void show_processbar(short x, short y)
         probar[pos] = PROCESS_CHAR;
         printf(probar + pos);
 	}
-    move_screen_cur(24, 79);
+    move_screen_cur((short)(con_height - 1), (short)(con_width - 1));
 }
 
 static void show_volume(short x, short y)
@@ -389,10 +405,35 @@ static void show_list()
     needupdatelist = false;
 
 	// move cursor to left-up bound
-    move_screen_cur(0, 0);    
-	printf(TITLE_TEXT);
+    move_screen_cur(0, 0);
+
+    // dynamic title
+    int tw = con_width;
+    char *title_line = (char*)_alloca(tw + 2);
+
+    // Line 1: blank
+    memset(title_line, ' ', tw);
+    title_line[tw] = '\n'; title_line[tw + 1] = '\0';
+    printf(title_line);
+
+    // Line 2: "   CONSOLE PLAYER"
+    memset(title_line, ' ', tw);
+    const char *ttl = "   CONSOLE PLAYER";
+    int ttl_len = (int)strlen(ttl);
+    if (ttl_len > tw) ttl_len = tw;
+    memcpy(title_line, ttl, ttl_len);
+    title_line[tw] = '\n'; title_line[tw + 1] = '\0';
+    printf(title_line);
+
+    // Line 3: underline
+    memset(title_line, '_', tw);
+    title_line[tw] = '\n'; title_line[tw + 1] = '\0';
+    printf(title_line);
 
 	// show play-list
+    char *fmt = (char*)_alloca(32);
+    _snprintf_s(fmt, 32, 31, "%%-%d.%ds\n", tw - 1, tw - 1);
+
 	for (int i = list_start; i <= list_end && i < SOUND_COUNT; i++)
 	{		    
         bool cur_on = list_cur == i - list_start;
@@ -427,9 +468,10 @@ static void show_list()
         }
         
         const char *path = sounds[i];
-		char npath[80] = {0};
-        _snprintf_s(npath, sizeof(npath), MAX_NAME_LENGTH, "%c %d %s", lmode, i + 1, path);
-        printf("%-79.79s\n", npath); // -80：左对齐，不足80补空格，.80：超过80截断
+		char *npath = (char*)_alloca(tw + 1);
+        memset(npath, 0, tw + 1);
+        _snprintf_s(npath, tw + 1, tw, "%c %d %s", lmode, i + 1, path);
+        printf(fmt, npath);
 		
         set_font_color(FONT_WHITE);
 	}	
@@ -472,17 +514,20 @@ static void make_visualizion(char key )
 static void show_visualization(short row, short col)
 {
     move_screen_cur(row, col);
-    const int width = 79;
-    const int height = 24;
-    char screenlines[width][height];
-	
+    const int width = con_width - 1;
+    const int height = con_height - 1;
+    
+    char **screenlines = (char**)_alloca(width * sizeof(char*));
+    for (int i = 0; i < width; i++)
+        screenlines[i] = (char*)_alloca(height);
+
     float ff_rate_step = (float)std::size(fft_rate) / width / 2.0f;
     for (int i = 0; i < width; i++)
 	{
 		float val = fft_rate[int(ff_rate_step * i)];
 		val = val / -5.0f;
 		if (val > height)
-			val = height;
+			val = (float)height;
 		char *line = screenlines[i];
 		int iv = height - (int)val;
         if (iv < height)
@@ -490,6 +535,7 @@ static void show_visualization(short row, short col)
 		memset(line + height - iv, vis_char, iv);		
 	}
         
+    char *outstr = (char*)_alloca(width + 1);
     for (int i = 0; i < height; i++)
     {
         if (i > height * 0.8f)
@@ -498,7 +544,6 @@ static void show_visualization(short row, short col)
             set_font_color(FONT_LIGHT_YELLOW);
         else
             set_font_color(FONT_LIGHT_RED);
-        char outstr[width+1];
         for (int j = 0; j < width; j++)
         {           
             outstr[j] = screenlines[j][i];
@@ -519,13 +564,17 @@ static void render()
 	else if (visualization_isopen)
 	{
 		show_visualization(0, 0);
-        show_processbar<79>(24, 0);
+        show_processbar((short)(con_height - 1), 0, con_width - 1);
 		return;
 	}    
+    short help_row = (short)(con_height - 4);
+    short proc_row = (short)(help_row - 1);
+    if (needupdatelist)
+        force_refresh_procbar = true;
 	show_list();
-	show_processbar<80>(20, 0);
-	show_help(21, 0);
-    show_volume(21, 40);
+	show_processbar(proc_row, 0, con_width);
+	show_help(help_row, 0);
+    show_volume(help_row, 40);
 }
 
 static void on_play_end(fmodwrap::Player *)
@@ -720,6 +769,22 @@ static void update( char key )
     else if (player && player->playing() && visualization_isopen)
         make_visualizion(key);
 
+    // Detect console size change
+    int old_w = con_width, old_h = con_height;
+    query_console_size();
+    if (old_w != con_width || old_h != con_height)
+    {
+        // Clamp list_cur to new MAX_LIST_INDEX
+        if (list_cur > MAX_LIST_INDEX)
+            list_cur = MAX_LIST_INDEX;
+        system("cls");
+        needupdatelist = true;
+        needupdatevolume = true;
+        needupdateprocbar = true;
+        needshowhelp = true;
+        force_refresh_procbar = true;
+    }
+
     Sleep(sleep_time);
     if (visualization_isopen)
         sleep_time = 10;
@@ -743,22 +808,39 @@ static void open_close_vis()
 
 static void init()
 {
-    system("mode con: cols=80 lines=25");
     SetConsoleTitleA("CONSOLE PLAYER");
-    COORD size = {80, 25};
-    SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), size);
-    SMALL_RECT rect = {0, 0, 80, 25};
-    SetConsoleWindowInfo(GetStdHandle(STD_OUTPUT_HANDLE), false, &rect);
 
-    DWORD dwStyle = GetWindowLong(GetConsoleWindow(), GWL_STYLE);
+    // Query current console size
+    query_console_size();
 
-    dwStyle &= ~(WS_SIZEBOX);
-    dwStyle &= ~(WS_MAXIMIZEBOX); //禁止最大化
+    if (con_width <= 80 && con_height <= 25)
+    {
+        // Small console (likely legacy conhost): set to 80x25 and lock size
+        SMALL_RECT minRect = {0, 0, 0, 0};
+        SetConsoleWindowInfo(GetStdHandle(STD_OUTPUT_HANDLE), TRUE, &minRect);
+        COORD size = {80, 25};
+        SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), size);
+        SMALL_RECT rect = {0, 0, 79, 24};
+        SetConsoleWindowInfo(GetStdHandle(STD_OUTPUT_HANDLE), TRUE, &rect);
 
-    SetWindowLong(GetConsoleWindow(), GWL_STYLE, dwStyle);
+        HWND hwnd = GetConsoleWindow();
+        if (hwnd)
+        {
+            DWORD dwStyle = GetWindowLong(hwnd, GWL_STYLE);
+            dwStyle &= ~(WS_SIZEBOX);
+            dwStyle &= ~(WS_MAXIMIZEBOX);
+            SetWindowLong(hwnd, GWL_STYLE, dwStyle);
+        }
+        con_width = 80;
+        con_height = 25;
+    }
+    // else: wide terminal (Windows Terminal etc.), use current size as-is
 
     fmodwrap::Open();
     create_list();
+
+    // Re-query after create_list, terminal size may have changed
+    query_console_size();
     player = fmodwrap::CreatePlayer();
     player->set_endcallback(on_play_end);
     fmodwrap::master_volume(0.5f);
