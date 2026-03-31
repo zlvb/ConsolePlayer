@@ -392,47 +392,101 @@ static char* utf8_to_mb(const char *utf8str)
     return result ? result : _strdup(utf8str);
 }
 
-// Read tag string from FMOD sound (returns NULL if not found)
-// Handles ASCII, UTF-8, UTF-16LE, UTF-16BE encodings
-static char* get_tag_string(FMOD_SOUND *fsound, const char *tagname)
+// Convert tag data to console-displayable string based on its encoding
+static char* decode_tag_data(const FMOD_TAG *tag)
 {
-    FMOD_TAG tag;
-    if (FMOD_Sound_GetTag(fsound, tagname, 0, &tag) != FMOD_OK)
-        return NULL;
-
-    if (tag.datatype == FMOD_TAGDATATYPE_STRING)
+    if (tag->datatype == FMOD_TAGDATATYPE_STRING)
+        return _strdup((const char*)tag->data);
+    else if (tag->datatype == FMOD_TAGDATATYPE_STRING_UTF8)
+        return utf8_to_mb((const char*)tag->data);
+    else if (tag->datatype == FMOD_TAGDATATYPE_STRING_UTF16)
     {
-        // ASCII/local codepage - use directly
-        return _strdup((const char*)tag.data);
-    }
-    else if (tag.datatype == FMOD_TAGDATATYPE_STRING_UTF8)
-    {
-        // UTF-8 -> console codepage
-        return utf8_to_mb((const char*)tag.data);
-    }
-    else if (tag.datatype == FMOD_TAGDATATYPE_STRING_UTF16)
-    {
-        // UTF-16 LE
-        const wchar_t *wstr = (const wchar_t*)tag.data;
-        int wlen = (int)(tag.datalen / sizeof(wchar_t));
-        // Skip BOM if present
+        const wchar_t *wstr = (const wchar_t*)tag->data;
+        int wlen = (int)(tag->datalen / sizeof(wchar_t));
         if (wlen > 0 && wstr[0] == 0xFEFF) { wstr++; wlen--; }
         return wide_to_mb(wstr, wlen);
     }
-    else if (tag.datatype == FMOD_TAGDATATYPE_STRING_UTF16BE)
+    else if (tag->datatype == FMOD_TAGDATATYPE_STRING_UTF16BE)
     {
-        // UTF-16 BE - byte-swap to LE
-        int wlen = (int)(tag.datalen / sizeof(wchar_t));
+        int wlen = (int)(tag->datalen / sizeof(wchar_t));
         wchar_t *wbuf = (wchar_t*)_alloca(wlen * sizeof(wchar_t));
-        const unsigned char *src = (const unsigned char*)tag.data;
+        const unsigned char *src = (const unsigned char*)tag->data;
         for (int i = 0; i < wlen; i++)
             wbuf[i] = (wchar_t)(src[i*2] << 8 | src[i*2+1]);
-        // Skip BOM if present
         const wchar_t *wstr = wbuf;
         if (wlen > 0 && wstr[0] == 0xFEFF) { wstr++; wlen--; }
         return wide_to_mb(wstr, wlen);
     }
     return NULL;
+}
+
+// Read title, artist and album from all tags (case-insensitive matching)
+static void read_song_tags(FMOD_SOUND *fsound, char **out_title, char **out_artist, char **out_album)
+{
+    *out_title = NULL;
+    *out_artist = NULL;
+    *out_album = NULL;
+
+    int numtags = 0;
+    FMOD_Sound_GetNumTags(fsound, &numtags, NULL);
+
+    // Priority: album artist > artist
+    char *album_artist = NULL;
+    char *artist = NULL;
+
+    for (int i = 0; i < numtags; i++)
+    {
+        FMOD_TAG tag;
+        if (FMOD_Sound_GetTag(fsound, NULL, i, &tag) != FMOD_OK)
+            continue;
+        if (!tag.name)
+            continue;
+
+        // Title
+        if (!*out_title &&
+            (_stricmp(tag.name, "TITLE") == 0 || _stricmp(tag.name, "TIT2") == 0))
+        {
+            *out_title = decode_tag_data(&tag);
+        }
+        // Album
+        else if (!*out_album &&
+            (_stricmp(tag.name, "ALBUM") == 0 ||
+             _stricmp(tag.name, "TALB") == 0 ||
+             _stricmp(tag.name, "WM/AlbumTitle") == 0))
+        {
+            *out_album = decode_tag_data(&tag);
+        }
+        // Album artist (higher priority)
+        else if (!album_artist &&
+            (_stricmp(tag.name, "ALBUMARTIST") == 0 ||
+             _stricmp(tag.name, "ALBUM ARTIST") == 0 ||
+             _stricmp(tag.name, "TPE2") == 0 ||
+             _stricmp(tag.name, "aART") == 0 ||
+             _stricmp(tag.name, "WM/AlbumArtist") == 0))
+        {
+            album_artist = decode_tag_data(&tag);
+        }
+        // Artist (lower priority fallback)
+        else if (!artist &&
+            (_stricmp(tag.name, "ARTIST") == 0 ||
+             _stricmp(tag.name, "TPE1") == 0 ||
+             _stricmp(tag.name, "Author") == 0))
+        {
+            artist = decode_tag_data(&tag);
+        }
+    }
+
+    // Prefer album artist, fallback to artist
+    if (album_artist && album_artist[0])
+    {
+        *out_artist = album_artist;
+        if (artist) free(artist);
+    }
+    else
+    {
+        *out_artist = artist;
+        if (album_artist) free(album_artist);
+    }
 }
 
 // Build display names from tags or filenames
@@ -449,44 +503,31 @@ static void build_display_names()
         
         char *title = NULL;
         char *artist = NULL;
+        char *album = NULL;
         if (result == FMOD_OK && fsound)
         {
-            // Title: try common tag names across all formats
-            title = get_tag_string(fsound, "TITLE");       // Vorbis/generic/WMA
-            if (!title)
-                title = get_tag_string(fsound, "TIT2");    // ID3v2 (MP3/AIFF)
-            if (!title)
-                title = get_tag_string(fsound, "Title");   // ASF/WMA
-
-            // Album artist first
-            artist = get_tag_string(fsound, "ALBUMARTIST");    // Vorbis (FLAC/OGG/OPUS)
-            if (!artist)
-                artist = get_tag_string(fsound, "ALBUM ARTIST"); // Vorbis alt
-            if (!artist)
-                artist = get_tag_string(fsound, "TPE2");       // ID3v2 (MP3/AIFF)
-            if (!artist)
-                artist = get_tag_string(fsound, "aART");       // iTunes/MP4 (AAC/M4A)
-            if (!artist)
-                artist = get_tag_string(fsound, "WM/AlbumArtist"); // ASF/WMA
-            // Fallback to performer/artist
-            if (!artist)
-                artist = get_tag_string(fsound, "ARTIST");     // Vorbis/generic
-            if (!artist)
-                artist = get_tag_string(fsound, "TPE1");       // ID3v2 (MP3/AIFF)
-            if (!artist)
-                artist = get_tag_string(fsound, "Author");     // ASF/WMA
+            read_song_tags(fsound, &title, &artist, &album);
             FMOD_Sound_Release(fsound);
         }
 
         char *display = NULL;
         if (title && title[0])
         {
-            if (artist && artist[0])
+            bool has_artist = (artist && artist[0]);
+            bool has_album  = (album && album[0]);
+            if (has_artist || has_album)
             {
-                // "Artist - Title"
-                size_t len = strlen(artist) + strlen(title) + 4;
+                // Build: [Artist - ] Title [ [Album]]
+                size_t len = strlen(title) + 4;
+                if (has_artist) len += strlen(artist) + 3; // "Artist - "
+                if (has_album)  len += strlen(album) + 3;  // " [Album]"
                 display = (char*)malloc(len);
-                sprintf_s(display, len, "%s - %s", artist, title);
+                if (has_artist && has_album)
+                    sprintf_s(display, len, "%s - %s [%s]", artist, title, album);
+                else if (has_artist)
+                    sprintf_s(display, len, "%s - %s", artist, title);
+                else
+                    sprintf_s(display, len, "%s [%s]", title, album);
             }
             else
             {
@@ -501,6 +542,7 @@ static void build_display_names()
         display_names.push_back(display);
         if (title) free(title);
         if (artist) free(artist);
+        if (album) free(album);
     }
 }
 
