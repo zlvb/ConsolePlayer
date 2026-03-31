@@ -38,6 +38,8 @@
 #include <share.h>
 #include <time.h>
 
+namespace fmodwrap { extern FMOD_SYSTEM *kFmod_system; }
+
 #define KEY_UP     72
 #define KEY_DOWN   80
 #define KEY_LEFT   75
@@ -149,6 +151,7 @@ enum LoopState
 };
 
 std::vector<char*> sounds;
+std::vector<char*> display_names;
 fmodwrap::Sound     *sound_playing = NULL;
 fmodwrap::Player    *player = NULL;
 int     list_cur = 0;
@@ -194,7 +197,23 @@ static void move_screen_cur(short row, short col)
     SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), point);
 }
 
-// about
+// about - print a centered line with background color, padded to con_width
+static void print_centered_line(const char *text)
+{
+    int len = (int)strlen(text);
+    int pad_left = (con_width - len) / 2;
+    int pad_right = con_width - len - pad_left;
+    if (pad_left < 0) pad_left = 0;
+    if (pad_right < 0) pad_right = 0;
+    char *line = (char*)_alloca(con_width + 2);
+    memset(line, ' ', con_width);
+    if (len > con_width) len = con_width;
+    memcpy(line + pad_left, text, len);
+    line[con_width] = '\n';
+    line[con_width + 1] = '\0';
+    printf(line);
+}
+
 static void switchabout()
 {    
     system("cls");
@@ -213,12 +232,24 @@ static void switchabout()
     }
     
     about_is_show = true;
-    printf("\n\n\n\n\n\n\n\n");
+
+    // Vertical centering: about block is 6 lines, center in window
+    int top_pad = (con_height - 12) / 2;
+    if (top_pad < 0) top_pad = 0;
+    for (int i = 0; i < top_pad; i++)
+        putchar('\n');
+
     set_font_color(FONT_BLACK | BG_WHITE);
-    printf(ABOUT_TEXT);
+    print_centered_line("");
+    print_centered_line("[ CONSOLE PLAYER ]");
+    print_centered_line("");
+    print_centered_line("Author: Zhang Li");
+    print_centered_line("Email: zlvbvbzl@gmail.com");
+    print_centered_line("");
     set_font_color(FONT_WHITE);
-    printf("\n\n\n\n"
-           "                                < [A] Return >\n");
+
+    printf("\n\n\n\n");
+    print_centered_line("< [A] Return >");
    
     move_screen_cur((short)(con_height - 1), (short)(con_width - 1));
 }
@@ -311,11 +342,174 @@ static void add_sound(const char *path)
     free(upperstr);
 }
 
+// Get display name from file path: strip leading ".\" and directory, keep filename without extension
+static char* make_display_name_from_path(const char *path)
+{
+    // Skip leading ".\" or "./"
+    const char *p = path;
+    if (p[0] == '.' && (p[1] == '\\' || p[1] == '/'))
+        p += 2;
+
+    // Find last separator to get filename
+    const char *fname = p;
+    for (const char *c = p; *c; c++)
+    {
+        if (*c == '\\' || *c == '/')
+            fname = c + 1;
+    }
+
+    // Copy filename, remove extension
+    char *name = _strdup(fname);
+    char *dot = strrchr(name, '.');
+    if (dot)
+        *dot = '\0';
+    return name;
+}
+
+// Convert wide string to console codepage (multibyte)
+static char* wide_to_mb(const wchar_t *wstr, int wlen)
+{
+    // Convert to console's codepage for display
+    UINT cp = GetConsoleOutputCP();
+    int mblen = WideCharToMultiByte(cp, 0, wstr, wlen, NULL, 0, NULL, NULL);
+    if (mblen <= 0) return NULL;
+    char *mb = (char*)malloc(mblen + 1);
+    WideCharToMultiByte(cp, 0, wstr, wlen, mb, mblen, NULL, NULL);
+    mb[mblen] = '\0';
+    return mb;
+}
+
+// Convert UTF-8 string to console codepage
+static char* utf8_to_mb(const char *utf8str)
+{
+    // UTF-8 -> wchar
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8str, -1, NULL, 0);
+    if (wlen <= 0) return _strdup(utf8str);
+    wchar_t *wbuf = (wchar_t*)_alloca(wlen * sizeof(wchar_t));
+    MultiByteToWideChar(CP_UTF8, 0, utf8str, -1, wbuf, wlen);
+    // wchar -> console CP
+    char *result = wide_to_mb(wbuf, wlen - 1);
+    return result ? result : _strdup(utf8str);
+}
+
+// Read tag string from FMOD sound (returns NULL if not found)
+// Handles ASCII, UTF-8, UTF-16LE, UTF-16BE encodings
+static char* get_tag_string(FMOD_SOUND *fsound, const char *tagname)
+{
+    FMOD_TAG tag;
+    if (FMOD_Sound_GetTag(fsound, tagname, 0, &tag) != FMOD_OK)
+        return NULL;
+
+    if (tag.datatype == FMOD_TAGDATATYPE_STRING)
+    {
+        // ASCII/local codepage - use directly
+        return _strdup((const char*)tag.data);
+    }
+    else if (tag.datatype == FMOD_TAGDATATYPE_STRING_UTF8)
+    {
+        // UTF-8 -> console codepage
+        return utf8_to_mb((const char*)tag.data);
+    }
+    else if (tag.datatype == FMOD_TAGDATATYPE_STRING_UTF16)
+    {
+        // UTF-16 LE
+        const wchar_t *wstr = (const wchar_t*)tag.data;
+        int wlen = (int)(tag.datalen / sizeof(wchar_t));
+        // Skip BOM if present
+        if (wlen > 0 && wstr[0] == 0xFEFF) { wstr++; wlen--; }
+        return wide_to_mb(wstr, wlen);
+    }
+    else if (tag.datatype == FMOD_TAGDATATYPE_STRING_UTF16BE)
+    {
+        // UTF-16 BE - byte-swap to LE
+        int wlen = (int)(tag.datalen / sizeof(wchar_t));
+        wchar_t *wbuf = (wchar_t*)_alloca(wlen * sizeof(wchar_t));
+        const unsigned char *src = (const unsigned char*)tag.data;
+        for (int i = 0; i < wlen; i++)
+            wbuf[i] = (wchar_t)(src[i*2] << 8 | src[i*2+1]);
+        // Skip BOM if present
+        const wchar_t *wstr = wbuf;
+        if (wlen > 0 && wstr[0] == 0xFEFF) { wstr++; wlen--; }
+        return wide_to_mb(wstr, wlen);
+    }
+    return NULL;
+}
+
+// Build display names from tags or filenames
+static void build_display_names()
+{
+    printf("Reading tags...\n");
+    for (int i = 0; i < SOUND_COUNT; i++)
+    {
+        printf("%-0.78s\r", sounds[i]);
+        FMOD_SOUND *fsound = NULL;
+        // Open sound in non-playing mode just to read tags
+        FMOD_RESULT result = FMOD_System_CreateSound(fmodwrap::kFmod_system, sounds[i],
+            FMOD_CREATESTREAM | FMOD_OPENONLY, NULL, &fsound);
+        
+        char *title = NULL;
+        char *artist = NULL;
+        if (result == FMOD_OK && fsound)
+        {
+            // Title: try common tag names across all formats
+            title = get_tag_string(fsound, "TITLE");       // Vorbis/generic/WMA
+            if (!title)
+                title = get_tag_string(fsound, "TIT2");    // ID3v2 (MP3/AIFF)
+            if (!title)
+                title = get_tag_string(fsound, "Title");   // ASF/WMA
+
+            // Album artist first
+            artist = get_tag_string(fsound, "ALBUMARTIST");    // Vorbis (FLAC/OGG/OPUS)
+            if (!artist)
+                artist = get_tag_string(fsound, "ALBUM ARTIST"); // Vorbis alt
+            if (!artist)
+                artist = get_tag_string(fsound, "TPE2");       // ID3v2 (MP3/AIFF)
+            if (!artist)
+                artist = get_tag_string(fsound, "aART");       // iTunes/MP4 (AAC/M4A)
+            if (!artist)
+                artist = get_tag_string(fsound, "WM/AlbumArtist"); // ASF/WMA
+            // Fallback to performer/artist
+            if (!artist)
+                artist = get_tag_string(fsound, "ARTIST");     // Vorbis/generic
+            if (!artist)
+                artist = get_tag_string(fsound, "TPE1");       // ID3v2 (MP3/AIFF)
+            if (!artist)
+                artist = get_tag_string(fsound, "Author");     // ASF/WMA
+            FMOD_Sound_Release(fsound);
+        }
+
+        char *display = NULL;
+        if (title && title[0])
+        {
+            if (artist && artist[0])
+            {
+                // "Artist - Title"
+                size_t len = strlen(artist) + strlen(title) + 4;
+                display = (char*)malloc(len);
+                sprintf_s(display, len, "%s - %s", artist, title);
+            }
+            else
+            {
+                display = _strdup(title);
+            }
+        }
+        else
+        {
+            display = make_display_name_from_path(sounds[i]);
+        }
+
+        display_names.push_back(display);
+        if (title) free(title);
+        if (artist) free(artist);
+    }
+}
+
 // search disk for generating play-list
 static void create_list()
 {
 	printf("Scaning folders...\n");
     ff_find(gs_path, add_sound);
+    build_display_names();
 	system("cls");
 	if (SOUND_COUNT == 0)
 	{
@@ -467,10 +661,10 @@ static void show_list()
             // pass
         }
         
-        const char *path = sounds[i];
+        const char *name = display_names[i];
 		char *npath = (char*)_alloca(tw + 1);
         memset(npath, 0, tw + 1);
-        _snprintf_s(npath, tw + 1, tw, "%c %d %s", lmode, i + 1, path);
+        _snprintf_s(npath, tw + 1, tw, "%c %d %s", lmode, i + 1, name);
         printf(fmt, npath);
 		
         set_font_color(FONT_WHITE);
@@ -725,7 +919,7 @@ static void play()
     need_next = false;
 
     char title[256];
-    sprintf_s(title, sizeof(title), "%-0.60s - %s", sounds[current_sound] + 2, "CONSOLE PLAYER");
+    sprintf_s(title, sizeof(title), "%-0.60s - %s", display_names[current_sound], "CONSOLE PLAYER");
     SetConsoleTitleA(title);
 }
 
@@ -858,6 +1052,10 @@ static void final()
     for each (char* path in sounds)
     {
         free(path);
+    }
+    for each (char* name in display_names)
+    {
+        free(name);
     }
 }
 
